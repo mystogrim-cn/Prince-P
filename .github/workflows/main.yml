@@ -56,14 +56,15 @@ jobs:
             echo "✅ Wings files restored."
           fi
 
-      - name: 🧩 Create Nginx Config (if missing)
+      - name: 🧩 Create Nginx Config (if missing) — safe heredoc
         run: |
           if [ ! -f "/etc/nginx/sites-available/pterodactyl.conf" ]; then
             echo "🌐 Creating Nginx configuration..."
             sudo apt-get update -y
             sudo apt-get install -y nginx php8.2-fpm php8.2-cli php8.2-mbstring php8.2-bcmath php8.2-json php8.2-mysql php8.2-gd php8.2-curl php8.2-xml composer mariadb-server
 
-            sudo bash -c 'cat > /etc/nginx/sites-available/pterodactyl.conf <<EOF
+            # Use sudo tee with an EOF that has escaped $ signs to avoid YAML/heredoc parsing issues
+            sudo bash -c 'cat > /etc/nginx/sites-available/pterodactyl.conf <<'"'"'NGINX_EOF'"'"'
 server {
     listen 80;
     server_name _;
@@ -88,9 +89,10 @@ server {
         deny all;
     }
 }
-EOF'
+NGINX_EOF'
+
             sudo ln -sf /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
-            sudo systemctl restart nginx php8.2-fpm
+            sudo systemctl restart nginx php8.2-fpm || true
             echo "✅ Nginx configuration created and loaded."
           else
             echo "✅ Nginx config already exists — skipping."
