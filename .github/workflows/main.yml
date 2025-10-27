@@ -62,7 +62,8 @@ jobs:
             echo "🌐 Creating Nginx configuration..."
             sudo apt-get update -y
             sudo apt-get install -y nginx php8.2-fpm php8.2-cli php8.2-mbstring php8.2-bcmath php8.2-json php8.2-mysql php8.2-gd php8.2-curl php8.2-xml composer mariadb-server
-            sudo tee /etc/nginx/sites-available/pterodactyl.conf > /dev/null <<'EOF'
+
+            sudo bash -c 'cat > /etc/nginx/sites-available/pterodactyl.conf <<EOF
 server {
     listen 80;
     server_name _;
@@ -73,13 +74,13 @@ server {
     error_log /var/log/nginx/pterodactyl.error.log;
 
     location / {
-        try_files $uri $uri/ /index.php?$query_string;
+        try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
@@ -87,7 +88,7 @@ server {
         deny all;
     }
 }
-EOF
+EOF'
             sudo ln -sf /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
             sudo systemctl restart nginx php8.2-fpm
             echo "✅ Nginx configuration created and loaded."
