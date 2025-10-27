@@ -6,7 +6,7 @@ on:
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 335  # 5 hours 30 mins + buffer
+    timeout-minutes: 335  # 5h30 + buffer
 
     steps:
       - name: Checkout repository
@@ -33,6 +33,15 @@ jobs:
             || echo "⚠️ vm-data branch not found — starting fresh."
           echo "✅ Data restored."
 
+          # Restore Pterodactyl files if backup exists
+          if [ -f pterodactyl_backup.tar.gz ]; then
+            echo "📦 Restoring Pterodactyl data..."
+            sudo tar -xzf pterodactyl_backup.tar.gz -C /
+            echo "✅ Pterodactyl restored."
+          else
+            echo "ℹ️ No Pterodactyl backup found — skipping restore."
+          fi
+
       - name: Start SSHX (for testing)
         run: |
           echo "⚙️ Starting SSHX..."
@@ -49,8 +58,15 @@ jobs:
         run: |
           echo "💾 Starting 10-sec autosave..."
           cd "$GITHUB_WORKSPACE/vm_data"
+
           nohup bash -c "while true; do
-            # Ensure all files (hidden and internal) are tracked
+            echo \"🧩 Compressing Pterodactyl data for backup...\"
+            sudo tar -czf pterodactyl_backup.tar.gz \
+              /var/www/pterodactyl \
+              /etc/pterodactyl \
+              /var/lib/pterodactyl 2>/dev/null || true
+
+            # Ensure all files (hidden + backups)
             find . -type d -empty -exec touch {}/.gitkeep \;
 
             # Git commit + push
@@ -62,11 +78,10 @@ jobs:
             git branch -M vm-data
             git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data >/dev/null 2>&1 || true
 
-            # Log heartbeat
             echo \"[\$(date '+%H:%M:%S')] ✅ Alive (autosave running)\" >> status.log
-
             sleep 10
           done" &
+
           echo "✅ Autosave running in background."
 
       - name: Keep VPS alive for 5 hours 30 minutes
@@ -84,10 +99,17 @@ jobs:
           echo "📦 Runner shutting down — saving final data..."
           cd "$GITHUB_WORKSPACE/vm_data"
 
-          # Ensure all files (hidden, internal, configs, public, private) are tracked
+          # Final backup of Pterodactyl
+          echo "🧩 Creating final Pterodactyl backup..."
+          sudo tar -czf pterodactyl_backup.tar.gz \
+            /var/www/pterodactyl \
+            /etc/pterodactyl \
+            /var/lib/pterodactyl 2>/dev/null || true
+          echo "✅ Pterodactyl backup ready."
+
+          # Ensure all files tracked
           find . -type d -empty -exec touch {}/.gitkeep \;
 
-          # Commit and push everything
           git init -q
           git config user.email 'actions@github.com'
           git config user.name 'github-actions'
@@ -97,7 +119,6 @@ jobs:
           git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data || true
           echo "✅ Final data saved."
 
-          # Log restart timestamp
           echo \"[$(date '+%H:%M:%S')] 🔁 Restart triggered\" >> status.log
 
           echo "♻️ Triggering automatic restart..."
