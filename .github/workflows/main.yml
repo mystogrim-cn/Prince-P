@@ -61,14 +61,17 @@ jobs:
           if [ -d "/var/www/pterodactyl" ] && [ -f "/var/www/pterodactyl/artisan" ]; then
             echo "🖥️ Starting Pterodactyl Panel..."
             cd /var/www/pterodactyl
-            sudo php artisan serve --host=0.0.0.0 --port=8080 > panel.log 2>&1 &
+            sudo chmod -R 777 /var/www/pterodactyl
+            nohup sudo php artisan serve --host=0.0.0.0 --port=8080 > /var/www/pterodactyl/panel.log 2>&1 &
+            echo "✅ Panel started on port 8080"
           else
             echo "⚠️ Panel not found, skipping startup."
           fi
 
           if command -v wings >/dev/null 2>&1; then
             echo "🪽 Starting Pterodactyl Wings..."
-            sudo systemctl start wings || sudo wings > wings.log 2>&1 &
+            sudo systemctl start wings || nohup sudo wings > /etc/pterodactyl/wings.log 2>&1 &
+            echo "✅ Wings started"
           else
             echo "⚠️ Wings not found, skipping startup."
           fi
