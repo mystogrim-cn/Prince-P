@@ -28,6 +28,8 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y git curl unzip rsync nginx php php-fpm php-cli php-mbstring php-xml php-bcmath php-json php-mysql mariadb-server redis docker.io sudo
+          # Remove containerd conflict
+          sudo apt-mark hold containerd containerd.io || true
 
       - name: ⚙️ Start SSHX (Remote Access)
         run: |
@@ -50,24 +52,23 @@ jobs:
         run: |
           echo "🚀 Starting Pterodactyl Panel + Wings..."
 
-          # Start Nginx and PHP
-          sudo systemctl enable nginx php8.2-fpm mariadb redis-server docker || true
-          sudo systemctl start nginx php8.2-fpm mariadb redis-server docker || true
+          sudo systemctl enable nginx php-fpm mariadb redis-server docker || true
+          sudo systemctl start nginx php-fpm mariadb redis-server docker || true
 
-          # Run panel (artisan serve if no nginx config)
+          # Panel
           if [ -d "/var/www/pterodactyl" ]; then
             cd /var/www/pterodactyl
             if ! ss -ltnp | grep -q ":80"; then
               echo "🌐 Starting PHP built-in server..."
               nohup php artisan serve --host=0.0.0.0 --port=80 > ~/panel.log 2>&1 &
             else
-              echo "✅ Port 80 in use — assuming Nginx handles panel."
+              echo "✅ Port 80 in use — Nginx serving panel."
             fi
           else
             echo "⚠️ Panel directory not found."
           fi
 
-          # Start Wings
+          # Wings
           if [ -f "/etc/pterodactyl/config.yml" ]; then
             echo "🚀 Launching Wings..."
             nohup sudo wings --config /etc/pterodactyl/config.yml > ~/wings.log 2>&1 &
@@ -85,8 +86,8 @@ jobs:
             echo "[ $(date "+%T") ] 🔁 Syncing panel and wings..."
             sudo mkdir -p /var/www/pterodactyl /etc/pterodactyl
             mkdir -p vm_data/panel vm_data/wings
-            sudo rsync -a --delete /var/www/pterodactyl/ vm_data/panel/ || true
-            sudo rsync -a --delete /etc/pterodactyl/ vm_data/wings/ || true
+            sudo rsync -a --delete /var/www/pterodactyl/ vm_data/panel/ 2>/dev/null || true
+            sudo rsync -a --delete /etc/pterodactyl/ vm_data/wings/ 2>/dev/null || true
 
             cd vm_data || exit
             git init -q
@@ -114,8 +115,9 @@ jobs:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           echo "💾 Finalizing backup..."
-          sudo rsync -a --delete /var/www/pterodactyl/ vm_data/panel/ || true
-          sudo rsync -a --delete /etc/pterodactyl/ vm_data/wings/ || true
+          sudo mkdir -p /var/www/pterodactyl /etc/pterodactyl
+          sudo rsync -a --delete /var/www/pterodactyl/ vm_data/panel/ 2>/dev/null || true
+          sudo rsync -a --delete /etc/pterodactyl/ vm_data/wings/ 2>/dev/null || true
 
           cd vm_data
           git init -q
@@ -133,6 +135,6 @@ jobs:
           curl -s -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $PAT_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}/dispatches" \
-            -d '{"ref":"main"}'
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$(basename "$GITHUB_WORKFLOW").yml/dispatches" \
+            -d '{"ref":"main"}' || echo "⚠️ Restart request may have failed (non-blocking)."
           echo "✅ Restart triggered."
