@@ -27,9 +27,8 @@ jobs:
       - name: ⚙️ Install required packages
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y git curl unzip rsync nginx php php-fpm php-cli php-mbstring php-xml php-bcmath php-json php-mysql mariadb-server redis docker.io sudo
-          # Remove containerd conflict
-          sudo apt-mark hold containerd containerd.io || true
+          sudo apt-get install -y git curl unzip rsync nginx php php-fpm php-cli php-mbstring php-xml php-bcmath php-json php-mysql mariadb-server redis sudo
+          echo "✅ Dependencies installed (Docker skipped)."
 
       - name: ⚙️ Start SSHX (Remote Access)
         run: |
@@ -52,10 +51,11 @@ jobs:
         run: |
           echo "🚀 Starting Pterodactyl Panel + Wings..."
 
-          sudo systemctl enable nginx php-fpm mariadb redis-server docker || true
-          sudo systemctl start nginx php-fpm mariadb redis-server docker || true
+          sudo systemctl enable nginx php-fpm mariadb redis-server || true
+          sudo systemctl start nginx php-fpm mariadb redis-server || true
+          sudo systemctl start docker || true  # Docker preinstalled in GitHub runner
 
-          # Panel
+          # === PANEL ===
           if [ -d "/var/www/pterodactyl" ]; then
             cd /var/www/pterodactyl
             if ! ss -ltnp | grep -q ":80"; then
@@ -68,7 +68,7 @@ jobs:
             echo "⚠️ Panel directory not found."
           fi
 
-          # Wings
+          # === WINGS ===
           if [ -f "/etc/pterodactyl/config.yml" ]; then
             echo "🚀 Launching Wings..."
             nohup sudo wings --config /etc/pterodactyl/config.yml > ~/wings.log 2>&1 &
