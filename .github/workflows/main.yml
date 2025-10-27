@@ -1,0 +1,109 @@
+name: Persistent Ubuntu VPS (5h30 Auto-Restart)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 335  # 5 hours 30 mins + buffer
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Prepare vm_data folder
+        run: |
+          echo "📁 Preparing vm_data folder..."
+          mkdir -p "$GITHUB_WORKSPACE/vm_data"
+          cd "$GITHUB_WORKSPACE/vm_data"
+          echo "✅ vm_data folder ready."
+
+      - name: Restore previous VM data
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔁 Restoring VM data from vm-data branch..."
+          cd "$GITHUB_WORKSPACE/vm_data"
+          rm -rf ./*
+          git clone --branch vm-data https://$PAT_TOKEN@github.com/${{ github.repository }} . \
+            || echo "⚠️ vm-data branch not found — starting fresh."
+          echo "✅ Data restored."
+
+      - name: Start SSHX (for testing)
+        run: |
+          echo "⚙️ Starting SSHX..."
+          cd "$GITHUB_WORKSPACE/vm_data"
+          nohup bash -c "curl -sSf https://sshx.io/get | sh -s run > sshx_link.txt 2>&1" &
+          sleep 8
+          echo "🌐 SSHX Link:"
+          grep -Eo 'https://sshx.io/[^ ]+' sshx_link.txt || echo "❌ SSHX link not found"
+          echo "✅ SSHX running."
+
+      - name: Start Heartbeat & Autosave
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "💾 Starting 10-sec autosave..."
+          cd "$GITHUB_WORKSPACE/vm_data"
+          nohup bash -c "while true; do
+            # Ensure all files (hidden and internal) are tracked
+            find . -type d -empty -exec touch {}/.gitkeep \;
+
+            # Git commit + push
+            git init -q
+            git config user.email 'actions@github.com'
+            git config user.name 'github-actions'
+            git add --all
+            git commit -m \"🕐 Autosave at \$(date '+%H:%M:%S')\" -q || true
+            git branch -M vm-data
+            git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data >/dev/null 2>&1 || true
+
+            # Log heartbeat
+            echo \"[\$(date '+%H:%M:%S')] ✅ Alive (autosave running)\" >> status.log
+
+            sleep 10
+          done" &
+          echo "✅ Autosave running in background."
+
+      - name: Keep VPS alive for 5 hours 30 minutes
+        run: |
+          echo "⏳ VPS running for 5 hours 30 minutes..."
+          sleep 19800
+
+      - name: Final Save + Auto Restart
+        if: always()
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          WORKFLOW_FILE: main.yml
+          RESTART_REF: main
+        run: |
+          echo "📦 Runner shutting down — saving final data..."
+          cd "$GITHUB_WORKSPACE/vm_data"
+
+          # Ensure all files (hidden, internal, configs, public, private) are tracked
+          find . -type d -empty -exec touch {}/.gitkeep \;
+
+          # Commit and push everything
+          git init -q
+          git config user.email 'actions@github.com'
+          git config user.name 'github-actions'
+          git add --all
+          git commit -m "💾 Final autosave before restart $(date '+%H:%M:%S')" -q || true
+          git branch -M vm-data
+          git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data || true
+          echo "✅ Final data saved."
+
+          # Log restart timestamp
+          echo \"[$(date '+%H:%M:%S')] 🔁 Restart triggered\" >> status.log
+
+          echo "♻️ Triggering automatic restart..."
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $PAT_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$WORKFLOW_FILE/dispatches" \
+            -d "{\"ref\":\"$RESTART_REF\"}"
+          echo "✅ Restart request sent to GitHub API!"
