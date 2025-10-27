@@ -1,4 +1,4 @@
-name: Persistent Ubuntu VPS (Pterodactyl Panel + Wings Auto-Restart)
+name: Persistent Ubuntu VPS (Pterodactyl + Wings)
 
 on:
   workflow_dispatch:
@@ -6,177 +6,151 @@ on:
 jobs:
   vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 335  # 5h30 + buffer
 
     steps:
-      - name: 🧱 Checkout repository
+      - name: 🧩 Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: 🔁 Restore vm_data from vm-data branch
+      - name: 📁 Prepare vm_data folder
+        run: |
+          echo "📦 Preparing vm_data folder..."
+          mkdir -p "$GITHUB_WORKSPACE/vm_data"
+          cd "$GITHUB_WORKSPACE/vm_data"
+          echo "✅ vm_data folder ready."
+
+      - name: 🔁 Restore VM data
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          echo "🔁 Restoring vm_data from vm-data branch..."
-          rm -rf "$GITHUB_WORKSPACE/vm_data"
-          mkdir -p "$GITHUB_WORKSPACE/vm_data"
+          echo "🔁 Restoring previous VM data..."
           cd "$GITHUB_WORKSPACE/vm_data"
-          git clone --branch vm-data "https://$PAT_TOKEN@github.com/${{ github.repository }}" . \
-            || echo "⚠️ vm-data branch not found — starting fresh."
-          echo "✅ vm_data restored (if present)."
+          rm -rf ./*
+          git clone --branch vm-data https://$PAT_TOKEN@github.com/${{ github.repository }} . \
+            || echo "⚠️ vm-data branch not found, starting fresh."
 
-      - name: 🧩 Restore Pterodactyl Panel + Wings
-        run: |
-          echo "♻️ Restoring panel and wings from vm_data..."
-          if [ -d "$GITHUB_WORKSPACE/vm_data/panel" ]; then
+          # Restore Pterodactyl panel & wings
+          if [ -d "panel" ]; then
+            echo "📂 Restoring Pterodactyl panel..."
             sudo mkdir -p /var/www/pterodactyl
-            sudo rsync -a "$GITHUB_WORKSPACE/vm_data/panel/" /var/www/pterodactyl/
-            echo "✅ Restored /var/www/pterodactyl"
+            sudo cp -r panel/* /var/www/pterodactyl/ 2>/dev/null || true
           fi
 
-          if [ -d "$GITHUB_WORKSPACE/vm_data/wings" ]; then
-            sudo mkdir -p /etc/pterodactyl
-            sudo rsync -a "$GITHUB_WORKSPACE/vm_data/wings/" /etc/pterodactyl/
-            echo "✅ Restored /etc/pterodactyl"
+          if [ -d "wings" ]; then
+            echo "🪽 Restoring Wings..."
+            sudo mkdir -p /etc/pterodactyl /var/lib/pterodactyl
+            sudo cp -r wings/* /etc/pterodactyl/ 2>/dev/null || true
           fi
+          echo "✅ Restore complete."
 
-      - name: ⚙️ Install required packages (git/rsync/sshx deps)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y git rsync curl unzip sudo
-
-      - name: ⚙️ Start SSHX (for remote access)
+      - name: 🌐 Start SSHX session
         run: |
           echo "⚙️ Starting SSHX..."
           cd "$GITHUB_WORKSPACE/vm_data"
           nohup bash -c "curl -sSf https://sshx.io/get | sh -s run > sshx_link.txt 2>&1" &
-          sleep 6
-          echo "🌐 SSHX Link (if available):"
-          grep -Eo 'https://sshx.io/[^ ]+' sshx_link.txt || echo "❌ SSHX link not found yet"
-          echo "✅ SSHX started (background)."
+          sleep 8
+          echo "🌍 SSHX Link:"
+          grep -Eo 'https://sshx.io/[^ ]+' sshx_link.txt || echo "❌ SSHX link not found"
+          echo "✅ SSHX running."
 
-      - name: 🧱 Check and Start Pterodactyl Panel + Wings
+      - name: 🚀 Start Pterodactyl Panel + Wings (if installed)
         run: |
-          echo "🔍 Checking for Pterodactyl installation..."
-
-          # === Start panel ===
-          if [ -d "/var/www/pterodactyl" ]; then
-            echo "✅ Panel found — starting..."
-            cd /var/www/pterodactyl || exit
-
-            # Start PHP and web server if not running
-            sudo systemctl start nginx || true
-            sudo systemctl start php8.2-fpm || sudo systemctl start php8.1-fpm || true
-
-            # Fallback: run artisan serve if no webserver
-            if ! ss -ltnp 2>/dev/null | grep -q ":80"; then
-              nohup php artisan serve --host=0.0.0.0 --port=80 > "$GITHUB_WORKSPACE/vm_data/panel_stdout.log" 2>&1 &
-              echo "🌐 Panel started on port 80."
-            else
-              echo "ℹ️ Port 80 busy — artisan serve skipped."
-            fi
+          if [ -d "/var/www/pterodactyl" ] && [ -f "/var/www/pterodactyl/artisan" ]; then
+            echo "🖥️ Starting Pterodactyl Panel..."
+            cd /var/www/pterodactyl
+            sudo php artisan serve --host=0.0.0.0 --port=8080 > panel.log 2>&1 &
           else
-            echo "⚠️ Panel not found — skipping."
+            echo "⚠️ Panel not found, skipping startup."
           fi
 
-          # === Start Wings ===
-          if [ -f "/etc/pterodactyl/config.yml" ]; then
-            echo "✅ Wings config found — starting..."
-            sudo systemctl daemon-reexec || true
-            sudo systemctl start docker || true
-
-            if systemctl list-units --type=service | grep -q "wings"; then
-              sudo systemctl restart wings || sudo systemctl start wings || true
-              echo "✅ Wings service started."
-            else
-              if command -v wings >/dev/null 2>&1; then
-                nohup sudo wings --config /etc/pterodactyl/config.yml > "$GITHUB_WORKSPACE/vm_data/wings.log" 2>&1 &
-                echo "✅ Wings binary started (background)."
-              else
-                echo "⚠️ Wings binary not found — skipping."
-              fi
-            fi
+          if command -v wings >/dev/null 2>&1; then
+            echo "🪽 Starting Pterodactyl Wings..."
+            sudo systemctl start wings || sudo wings > wings.log 2>&1 &
           else
-            echo "⚠️ Wings not configured — skipping."
+            echo "⚠️ Wings not found, skipping startup."
           fi
 
-      - name: 🔁 Auto-backup Panel + Wings every 10s
+      - name: 💾 Start 10-sec autosave (panel + wings)
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          echo "💾 Starting autosave loop (panel + wings)..."
-          cd "$GITHUB_WORKSPACE"
+          echo "💾 Starting autosave..."
+          cd "$GITHUB_WORKSPACE/vm_data"
+
           nohup bash -c "while true; do
-            echo \"[ \$(date '+%F %T') ] 🔁 Creating fresh backup...\"
+            echo \"📦 [\$(date '+%H:%M:%S')] Backing up data...\"
 
-            # Clean old backups
-            rm -rf vm_data/panel vm_data/wings
-            mkdir -p vm_data/panel vm_data/wings
-
-            # Backup panel + wings
-            sudo rsync -a --delete /var/www/pterodactyl/ vm_data/panel/ || true
-            sudo rsync -a --delete /etc/pterodactyl/ vm_data/wings/ || true
-
-            # Push to vm-data branch
-            cd vm_data
-            if [ ! -d .git ]; then
-              git init -q
-              git remote add origin https://$PAT_TOKEN@github.com/${{ github.repository }}
+            # Backup Panel
+            sudo mkdir -p panel
+            sudo rm -rf panel/*
+            if [ -d /var/www/pterodactyl ]; then
+              sudo cp -r /var/www/pterodactyl/* panel/ || echo '⚠️ Failed to copy panel files'
+              echo \"🖥️ Panel backup: \$(ls -1 panel | wc -l) files saved.\"
+            else
+              echo '⚠️ /var/www/pterodactyl not found.'
             fi
+
+            # Backup Wings
+            sudo mkdir -p wings
+            sudo rm -rf wings/*
+            if [ -d /etc/pterodactyl ]; then
+              sudo cp -r /etc/pterodactyl/* wings/ || echo '⚠️ Failed to copy wings config'
+              echo \"🪽 Wings backup: \$(ls -1 wings | wc -l) files saved.\"
+            else
+              echo '⚠️ /etc/pterodactyl not found.'
+            fi
+
+            # Git commit + push
+            git init -q
             git config user.email 'actions@github.com'
             git config user.name 'github-actions'
             git add --all
-            git commit -m \"💾 Backup (panel+wings) at \$(date '+%F %T')\" -q || true
-            git branch -M vm-data || true
+            git commit -m \"🕐 Autosave at \$(date '+%H:%M:%S')\" -q || true
+            git branch -M vm-data
             git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data >/dev/null 2>&1 || true
 
-            echo \"✅ Backup done at \$(date '+%T')\"
+            echo \"✅ Autosave complete.\"
             sleep 10
-          done" > "$GITHUB_WORKSPACE/vm_data/autosave.log" 2>&1 &
+          done" &
+          echo "✅ Autosave running in background."
 
-          echo "✅ Backup loop started (logs -> vm_data/autosave.log)."
-
-      - name: ⏳ Keep VPS alive
+      - name: ⏳ Keep VPS alive (5h30)
         run: |
-          echo "⏳ VPS running (sleep until timeout)..."
+          echo "⏳ VPS running for 5h30..."
           sleep 19800
 
-      - name: 💾 Final Save + Auto Restart
+      - name: 💾 Final save + Auto restart
         if: always()
         env:
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          WORKFLOW_FILE: vps.yml
+          WORKFLOW_FILE: main.yml
           RESTART_REF: main
         run: |
-          echo "📦 Final backup before shutdown..."
-          cd "$GITHUB_WORKSPACE"
+          echo "📦 Saving final state before restart..."
+          cd "$GITHUB_WORKSPACE/vm_data"
 
-          # Final backups
-          rm -rf vm_data/panel vm_data/wings
-          sudo rsync -a /var/www/pterodactyl/ vm_data/panel/ || true
-          sudo rsync -a /etc/pterodactyl/ vm_data/wings/ || true
+          # Final backup
+          sudo mkdir -p panel wings
+          sudo rm -rf panel/* wings/*
+          sudo cp -r /var/www/pterodactyl/* panel/ 2>/dev/null || true
+          sudo cp -r /etc/pterodactyl/* wings/ 2>/dev/null || true
 
-          cd vm_data
-          if [ ! -d .git ]; then
-            git init -q
-            git remote add origin https://$PAT_TOKEN@github.com/${{ github.repository }}
-          fi
+          git init -q
           git config user.email 'actions@github.com'
           git config user.name 'github-actions'
           git add --all
-          git commit -m "💾 Final backup before restart $(date '+%F %T')" -q || true
-          git branch -M vm-data || true
+          git commit -m \"💾 Final autosave before restart $(date '+%H:%M:%S')\" -q || true
+          git branch -M vm-data
           git push -f https://$PAT_TOKEN@github.com/${{ github.repository }} vm-data || true
 
-          echo "✅ Final backup pushed."
-
-          # Auto-restart
-          echo "♻️ Triggering workflow restart..."
-          curl -s -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $PAT_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$WORKFLOW_FILE/dispatches" \
-            -d "{\"ref\":\"$RESTART_REF\"}" || true
-          echo "✅ Restart requested."
+          echo \"[$(date '+%H:%M:%S')] 🔁 Restart triggered\" >> status.log
+          echo \"♻️ Restarting workflow...\"
+          curl -X POST \
+            -H \"Accept: application/vnd.github+json\" \
+            -H \"Authorization: Bearer $PAT_TOKEN\" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/$WORKFLOW_FILE/dispatches \
+            -d '{\"ref\":\"'$RESTART_REF'\"}'
+          echo "✅ Restart request sent."
